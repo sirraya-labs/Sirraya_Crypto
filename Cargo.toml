@@ -1,0 +1,83 @@
+[package]
+name = "sirraya-ml-dsa-44"
+version = "0.1.0"
+edition = "2021"
+description = "ML-DSA-44 Post-Quantum Digital Signatures (FIPS 204) with W3C Verifiable Credentials"
+license = "MIT"
+authors = ["Sirraya Labs"]
+repository = "https://github.com/sirraya-labs/sirraya-ml-dsa-44"
+
+[dependencies]
+# Core cryptographic
+sha3 = "0.10"
+sha2 = "0.10"
+rand_core = { version = "0.6", features = ["std"] }
+
+# Always available
+serde_json = "1.0"
+hex = "0.4.3"
+bs58 = "0.5"
+
+# Optional for W3C VC support
+serde = { version = "1.0", features = ["derive"], optional = true }
+base64 = { version = "0.22", optional = true }
+multibase = { version = "0.9", optional = true }
+uuid = { version = "1.5", features = ["serde", "v4"], optional = true }
+chrono = { version = "0.4", features = ["serde"], optional = true }
+rand = "0.10.2"
+
+[dev-dependencies]
+tempfile = "3.8"
+
+[features]
+default = ["std"]
+std = []
+masking = []
+
+w3c = [
+    "dep:serde",
+    "dep:base64",
+    "dep:uuid",
+    "dep:chrono",
+    "dep:multibase",
+]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
+# ============ EXAMPLES ============
+[[example]]
+name = "verify_ead_final"
+path = "examples/verify_ead_final.rs"
+
+[[example]]
+name = "decode_multicodec"
+path = "examples/decode_multicodec.rs"
+
+[[example]]
+name = "generate_test_vectors"
+path = "examples/generate_test_vectors.rs"
+required-features = ["w3c"]
+
+# ============ BINARIES ============
+[[bin]]
+name = "ml-dsa-44"
+path = "src/main.rs"
+
+[[bin]]
+name = "dudect_test"
+path = "src/bin/dudect_test.rs"
+
+[[bin]]
+name = "formal_verify"
+path = "src/bin/formal_verify.rs"
+
+[[bin]]
+name = "timing_diagnostic"
+path = "src/bin/timing_diagnostic.rs"
+
+[[bin]]
+name = "sucre"
+path = "src/bin/sucre.rs"
