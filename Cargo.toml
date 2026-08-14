@@ -47,37 +47,9 @@ opt-level = 3
 lto = true
 codegen-units = 1
 
-# ============ EXAMPLES ============
-[[example]]
-name = "verify_ead_final"
-path = "examples/verify_ead_final.rs"
-
-[[example]]
-name = "decode_multicodec"
-path = "examples/decode_multicodec.rs"
-
-[[example]]
-name = "generate_test_vectors"
-path = "examples/generate_test_vectors.rs"
-required-features = ["w3c"]
 
 # ============ BINARIES ============
 [[bin]]
 name = "ml-dsa-44"
 path = "src/main.rs"
 
-[[bin]]
-name = "dudect_test"
-path = "src/bin/dudect_test.rs"
-
-[[bin]]
-name = "formal_verify"
-path = "src/bin/formal_verify.rs"
-
-[[bin]]
-name = "timing_diagnostic"
-path = "src/bin/timing_diagnostic.rs"
-
-[[bin]]
-name = "sucre"
-path = "src/bin/sucre.rs"

@@ -1,6 +1,18 @@
 // main.rs — ML-DSA-44 CLI tool with console output
+//
+// HARDENED:
+//  - `sign --sk <hex>` is deprecated in favor of `sign --sk-file <path>`.
+//    Passing a secret key as a CLI argument puts it in `ps`/process-listing
+//    output on any multi-user box and in shell history (~/.bash_history,
+//    ~/.zsh_history) — both are real exposure paths, not theoretical. The
+//    hex/Vec buffers used to decode it are also zeroized here, since the
+//    zeroization pass in mldsa44.rs/polynomial.rs never covered this layer.
+//  - `keygen` no longer prints the secret key to stdout by default; use
+//    `--save` (writes sk.bin with restrictive permissions) or explicit
+//    `--show-secret` if you really want it on the terminal.
 use std::env;
 use std::fs;
+use polynomial::zeroize_bytes;
 
 mod constants_44;
 mod polynomial;
@@ -48,14 +60,21 @@ fn print_usage(prog: &str) {
 
 fn cmd_keygen(args: &[String]) {
     let save_to_files = args.contains(&"--save".to_string());
-    
-    let (pk, sk) = if let Some(pos) = args.iter().position(|a| a == "--seed") {
+    let show_secret = args.contains(&"--show-secret".to_string());
+
+    let (pk, mut sk) = if let Some(pos) = args.iter().position(|a| a == "--seed") {
         if pos + 1 < args.len() {
             let hex = &args[pos + 1];
             let bytes = hex::decode(hex).expect("Invalid hex seed");
+            if bytes.len() != 32 {
+                eprintln!("Seed must be exactly 32 bytes (64 hex chars)");
+                return;
+            }
             let mut seed = [0u8; 32];
             seed.copy_from_slice(&bytes);
-            MlDsa44::keypair_from_seed(&seed).expect("Key generation failed")
+            let result = MlDsa44::keypair_from_seed(&seed).expect("Key generation failed");
+            zeroize_bytes(&mut seed);
+            result
         } else {
             eprintln!("Missing seed value");
             return;
@@ -67,9 +86,17 @@ fn cmd_keygen(args: &[String]) {
     if save_to_files {
         fs::write("pk.bin", pk).expect("Failed to write public key");
         fs::write("sk.bin", sk).expect("Failed to write secret key");
-        println!("Keys saved to pk.bin and sk.bin");
+        // Best-effort: restrict sk.bin to owner read/write only. On a
+        // world-readable umask this file would otherwise be exposed to
+        // every local user, which defeats the point of hardened storage.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions("sk.bin", fs::Permissions::from_mode(0o600));
+        }
+        println!("Keys saved to pk.bin and sk.bin (sk.bin restricted to 0600 on Unix)");
     }
-    
+
     println!("======================================================================");
     println!("  ML-DSA-44 KEYPAIR");
     println!("======================================================================");
@@ -78,21 +105,38 @@ fn cmd_keygen(args: &[String]) {
     println!();
     println!("  PUBLIC KEY ({} bytes):", PUBLICKEYBYTES);
     println!("  {}", hex_encode(&pk));
-    println!();
-    println!("  SECRET KEY ({} bytes):", SECRETKEYBYTES);
-    println!("  {}", hex_encode(&sk));
+
+    if show_secret {
+        println!();
+        println!("  SECRET KEY ({} bytes) — visible because --show-secret was passed.", SECRETKEYBYTES);
+        println!("  This will remain in your terminal scrollback/logs. Prefer --save instead.");
+        println!("  {}", hex_encode(&sk));
+    } else if !save_to_files {
+        println!();
+        println!("  Secret key generated but NOT printed (avoids leaving it in scrollback/logs).");
+        println!("  Re-run with --save to write sk.bin, or --show-secret to print it anyway.");
+    }
     println!("======================================================================");
+
+    zeroize_bytes(&mut sk);
 }
 
 fn cmd_sign(args: &[String]) {
     let mut sk_hex = String::new();
+    let mut sk_file: Option<String> = None;
     let mut message = String::new();
     let mut sig_file = None;
 
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
-            "--sk" => { i += 1; sk_hex = args[i].clone(); }
+            "--sk" => {
+                i += 1;
+                eprintln!("WARNING: --sk <hex> puts your secret key in argv (visible via `ps`,");
+                eprintln!("         /proc, and shell history). Prefer --sk-file <path>.");
+                sk_hex = args[i].clone();
+            }
+            "--sk-file" => { i += 1; sk_file = Some(args[i].clone()); }
             "--msg" => { i += 1; message = args[i].clone(); }
             "--sig" => { i += 1; sig_file = Some(args[i].clone()); }
             _ => { eprintln!("Unknown flag: {}", args[i]); return; }
@@ -100,17 +144,34 @@ fn cmd_sign(args: &[String]) {
         i += 1;
     }
 
-    if sk_hex.is_empty() || message.is_empty() {
-        eprintln!("Usage: sign --sk <hex> --msg <message>");
+    if (sk_hex.is_empty() && sk_file.is_none()) || message.is_empty() {
+        eprintln!("Usage: sign --sk-file <path> --msg <message>   (preferred)");
+        eprintln!("   or: sign --sk <hex> --msg <message>          (leaks key via argv/history)");
         return;
     }
 
-    let sk_bytes = hex::decode(&sk_hex).expect("Invalid secret key hex");
+    let mut sk_bytes = if let Some(path) = sk_file {
+        fs::read(&path).expect("Failed to read secret key file")
+    } else {
+        let bytes = hex::decode(&sk_hex).expect("Invalid secret key hex");
+        // The hex string itself (sk_hex, and args[i] it was cloned from)
+        // still lives in the process's argv/environment for the process
+        // lifetime — that's an OS-level exposure this program cannot
+        // clear. We can and do clear our own decoded copy below.
+        bytes
+    };
+    if sk_bytes.len() != SECRETKEYBYTES {
+        eprintln!("Secret key must be exactly {} bytes", SECRETKEYBYTES);
+        zeroize_bytes(&mut sk_bytes);
+        return;
+    }
     let mut sk = [0u8; SECRETKEYBYTES];
     sk.copy_from_slice(&sk_bytes);
-    
+    zeroize_bytes(&mut sk_bytes);
+
     let sig = MlDsa44::sign(&sk, message.as_bytes()).expect("Signing failed");
-    
+    zeroize_bytes(&mut sk);
+
     if let Some(path) = sig_file {
         fs::write(&path, sig).expect("Failed to write signature");
         println!("Signature saved to {}", path);

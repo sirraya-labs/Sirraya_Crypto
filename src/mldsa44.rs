@@ -27,6 +27,51 @@ use crate::constants_44::*;
 use crate::polynomial::*;
 use crate::polynomial::zeroize_bytes;
 
+// ---------------------------------------------------------------------------
+// SecretKey — HARDENED wrapper.
+//
+// The rest of this module (and the original crate) passed the secret key
+// around as a bare `[u8; SECRETKEYBYTES]`. That type is `Copy`, so every
+// function call, every `let sk2 = sk;`, every struct field assignment
+// silently duplicates 2560 bytes of key material to a *new* stack slot that
+// none of the manual `zeroize_bytes` calls elsewhere in this file ever
+// touch — the zeroization pass only covers the *unpacked* intermediates
+// (s1/s2/t0/etc.), not copies of the packed key itself. A `[u8; N]` also has
+// no `Drop`, so once it goes out of scope it's just left for the allocator/
+// stack to overwrite whenever, not cleared immediately.
+//
+// `SecretKey` fixes both: it is NOT `Copy` (only `Clone`, and `Clone` is
+// still something callers should avoid), and it zeroizes on `Drop`. Treat
+// `[u8; SECRETKEYBYTES]` in the free functions below as the low-level ABI
+// (kept for compatibility with existing signatures/tests); prefer
+// `SecretKey` at any new call site, especially in library consumers.
+pub struct SecretKey(pub [u8; SECRETKEYBYTES]);
+
+impl SecretKey {
+    pub fn as_bytes(&self) -> &[u8; SECRETKEYBYTES] {
+        &self.0
+    }
+}
+
+impl Clone for SecretKey {
+    fn clone(&self) -> Self {
+        SecretKey(self.0)
+    }
+}
+
+// Redact secret material from accidental `{:?}`/logging.
+impl core::fmt::Debug for SecretKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "SecretKey(REDACTED, {} bytes)", SECRETKEYBYTES)
+    }
+}
+
+impl Drop for SecretKey {
+    fn drop(&mut self) {
+        zeroize_bytes(&mut self.0);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MlDsaError {
     RngFailed,
@@ -283,8 +328,18 @@ fn w1_encode(w1: &[Poly; K]) -> [u8; K * POLYW1_PACKEDBYTES] {
 pub fn keypair_from_seed(
     xi: &[u8; SEEDBYTES],
 ) -> Result<([u8; PUBLICKEYBYTES], [u8; SECRETKEYBYTES]), MlDsaError> {
-    // FIPS 204 §6.1 Algorithm 1 step 1:
-    // (ρ, ρ', K) = SHAKE-256(ξ || 0x02 || 0x00, 128)
+    // FIPS 204 Algorithm 6 ("ML-DSA.KeyGen_internal"), line 1:
+    //   (ρ, ρ', K) ← H(ξ || IntegerToBytes(k,1) || IntegerToBytes(l,1), 128)
+    //
+    // CORRECTED: the previous version hashed xi || 0x02 || 0x00, which does
+    // not match the spec for ANY ML-DSA parameter set and silently produced
+    // keys that cannot be validated against NIST ACVP/KAT vectors and are
+    // not interoperable with any conformant ML-DSA-44 implementation. The
+    // spec's domain bytes are the module rank (k, l) themselves — for
+    // ML-DSA-44, k = L = K = 4 in this crate's naming (K=4, L=4) — so both
+    // bytes are 0x04. Using k/l (rather than a fixed constant) is also what
+    // gives cross-parameter-set domain separation if this crate ever grows
+    // ML-DSA-65/87 sharing code paths.
     let mut expanded = [0u8; 128];
     {
         use sha3::{
@@ -293,8 +348,8 @@ pub fn keypair_from_seed(
         };
         let mut h = Shake256::default();
         h.update(xi);
-        h.update(&[0x02]); // Domain separator for ML-DSA
-        h.update(&[0x00]); // Context index for initial expansion
+        h.update(&[K as u8]); // IntegerToBytes(k, 1)
+        h.update(&[L as u8]); // IntegerToBytes(l, 1)
         h.finalize_xof().read(&mut expanded);
     }
 
@@ -748,11 +803,33 @@ impl MlDsa44 {
     pub const PK_BYTES: usize = PUBLICKEYBYTES;
     pub const SK_BYTES: usize = SECRETKEYBYTES;
     pub const SIG_BYTES: usize = SIGNBYTES;
+
+    /// HARDENED entry point: returns the secret key wrapped in `SecretKey`
+    /// so it zeroizes on drop instead of being left as a bare `Copy` array.
+    /// Prefer this over `keypair()` in new code.
+    pub fn keypair_hardened() -> Result<([u8; PUBLICKEYBYTES], SecretKey), MlDsaError> {
+        let (pk, sk) = keypair()?;
+        Ok((pk, SecretKey(sk)))
+    }
+
+    pub fn sign_hardened(sk: &SecretKey, msg: &[u8]) -> Result<[u8; SIGNBYTES], MlDsaError> {
+        sign(sk.as_bytes(), msg)
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Diagnostic Module
+//
+// HARDENED: this module prints raw secret-key material (s1, s2, t0, the
+// K seed, tr) to stdout. That is unconditional secret exposure — into
+// terminal scrollback, shell session logs, CI logs, screen-recording
+// software, journald, anything capturing stdout. It must never be part of
+// a release library's default surface. Gate it behind an explicit,
+// off-by-default feature so a downstream `cargo add sirraya-ml-dsa-44`
+// cannot reach it by accident, and so `cargo audit`/dependency review
+// tooling can flag "diagnostic-unsafe" as a red flag if it's ever enabled.
 // ---------------------------------------------------------------------------
+#[cfg(feature = "diagnostic-unsafe")]
 pub mod diagnostic {
     use super::*;
 
@@ -1041,11 +1118,14 @@ pub fn run_tests() -> Result<(), MlDsaError> {
 
     assert!(!verify(&pk, b"tampered", &sig)?, "should reject wrong message");
 
-    println!("\n[6/6] Lattice Demonstration ...");
-    if let Err(e) = diagnostic::demonstrate_lattice() {
-        println!("   Lattice demo warning: {}", e);
-    } else {
-        println!("   PASS");
+    #[cfg(feature = "diagnostic-unsafe")]
+    {
+        println!("\n[6/6] Lattice Demonstration (diagnostic-unsafe: prints secret material) ...");
+        if let Err(e) = diagnostic::demonstrate_lattice() {
+            println!("   Lattice demo warning: {}", e);
+        } else {
+            println!("   PASS");
+        }
     }
 
     println!("\nAll tests passed.");
