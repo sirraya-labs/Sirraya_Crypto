@@ -1,4 +1,13 @@
-// main.rs — ML-DSA-44 CLI tool with console output
+// main.rs — ML-DSA CLI tool with console output.
+//
+// Supports every FIPS 204 parameter set the crate implements — currently
+// ML-DSA-44 (default) and ML-DSA-65 — selected with `--alg`. Every
+// subcommand (`keygen`/`sign`/`verify`/`test`) is written exactly once,
+// generically against `SignatureScheme` (see `run`/`cmd_*` below), and
+// dispatched to the concrete type in `main`. Adding ML-DSA-87 later means
+// adding one `Algorithm` variant and one match arm in `main` — none of the
+// command logic changes, the same way adding the parameter set itself
+// didn't require touching `hybrid.rs` or `common::ring`.
 //
 // HARDENED:
 //  - `sign --sk <hex>` is deprecated in favor of `sign --sk-file <path>`.
@@ -6,7 +15,7 @@
 //    output on any multi-user box and in shell history (~/.bash_history,
 //    ~/.zsh_history) — both are real exposure paths, not theoretical. The
 //    hex/Vec buffers used to decode it are also zeroized here, since the
-//    zeroization pass in mldsa44.rs/polynomial.rs never covered this layer.
+//    zeroization pass in the ring/packing layer never covered this layer.
 //  - `keygen` no longer prints the secret key to stdout by default; use
 //    `--save` (writes sk.bin with restrictive permissions) or explicit
 //    `--show-secret` if you really want it on the terminal.
@@ -14,74 +23,124 @@ use std::env;
 use std::fs;
 
 use sirraya_ml_dsa_44::common::ring::zeroize_bytes;
-use sirraya_ml_dsa_44::dsa::ml_dsa::ml_dsa_44::constants::*;
-use sirraya_ml_dsa_44::MlDsa44;
+use sirraya_ml_dsa_44::traits::SignatureScheme;
+use sirraya_ml_dsa_44::{MlDsa44, MlDsa65};
+
+#[derive(Clone, Copy)]
+enum Algorithm {
+    MlDsa44,
+    MlDsa65,
+}
+
+impl Algorithm {
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "ml-dsa-44" | "mldsa44" | "44" => Some(Algorithm::MlDsa44),
+            "ml-dsa-65" | "mldsa65" | "65" => Some(Algorithm::MlDsa65),
+            _ => None,
+        }
+    }
+}
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
+    let mut args: Vec<String> = env::args().collect();
+
+    // Pull `--alg <name>` out of the argument list wherever it appears, so
+    // subcommand parsing below never has to know about it. Defaults to
+    // ML-DSA-44, matching this CLI's behavior before --alg existed.
+    let mut alg = Algorithm::MlDsa44;
+    if let Some(pos) = args.iter().position(|a| a == "--alg") {
+        if pos + 1 >= args.len() {
+            eprintln!("--alg requires a value: ml-dsa-44 or ml-dsa-65");
+            return;
+        }
+        match Algorithm::parse(&args[pos + 1]) {
+            Some(a) => alg = a,
+            None => {
+                eprintln!(
+                    "Unknown --alg '{}': expected ml-dsa-44 or ml-dsa-65",
+                    args[pos + 1]
+                );
+                return;
+            }
+        }
+        args.drain(pos..=pos + 1);
+    }
+
     if args.len() < 2 {
         print_usage(&args[0]);
         return;
     }
 
+    match alg {
+        Algorithm::MlDsa44 => run::<MlDsa44>(&args),
+        Algorithm::MlDsa65 => run::<MlDsa65>(&args),
+    }
+}
+
+/// Every subcommand, written once against the trait. `T` is `MlDsa44` or
+/// `MlDsa65` here — nothing below this line is parameter-set-specific.
+fn run<T: SignatureScheme>(args: &[String]) {
     match args[1].as_str() {
-        "keygen" => cmd_keygen(&args),
-        "sign" => cmd_sign(&args),
-        "verify" => cmd_verify(&args),
-        "test" => test_all(),
+        "keygen" => cmd_keygen::<T>(args),
+        "sign" => cmd_sign::<T>(args),
+        "verify" => cmd_verify::<T>(args),
+        "test" => test_all::<T>(),
         _ => print_usage(&args[0]),
     }
 }
 
 fn print_usage(prog: &str) {
-    println!("ML-DSA-44 (FIPS 204) - Post-Quantum Digital Signatures");
-    println!("  Security Level: Category 2 (128-bit)");
-    println!("  Module Rank: K={}, L={}", K, L);
-    println!();
-    println!("  Public Key:  {} bytes", PUBLICKEYBYTES);
-    println!("  Secret Key:  {} bytes", SECRETKEYBYTES);
-    println!("  Signature:   {} bytes", SIGNBYTES);
+    println!("ML-DSA (FIPS 204) - Post-Quantum Digital Signatures");
+    println!("  Supported algorithms: ml-dsa-44 (default), ml-dsa-65");
+    println!("  Select with: --alg ml-dsa-44 | --alg ml-dsa-65");
     println!();
     println!("Usage:");
-    println!("  {} keygen                    Generate and print keypair", prog);
-    println!("  {} keygen --save             Generate and save to files", prog);
-    println!("  {} sign --sk <hex> --msg <str>  Sign a message", prog);
-    println!("  {} verify --pk <hex> --msg <str> --sig <hex>", prog);
-    println!("  {} test                      Run self-test", prog);
+    println!("  {} [--alg <name>] keygen                      Generate and print keypair", prog);
+    println!("  {} [--alg <name>] keygen --save               Generate and save to files", prog);
+    println!("  {} [--alg <name>] sign --sk-file <path> --msg <str>   Sign a message", prog);
+    println!("  {} [--alg <name>] verify --pk <hex> --msg <str> --sig <hex>", prog);
+    println!("  {} [--alg <name>] test                        Run self-test", prog);
     println!();
     println!("Examples:");
     println!("  {} keygen", prog);
-    println!("  {} sign --sk <sk_hex> --msg \"hello world\"", prog);
+    println!("  {} --alg ml-dsa-65 keygen --save", prog);
+    println!("  {} sign --sk-file sk.bin --msg \"hello world\"", prog);
+    println!("  {} --alg ml-dsa-65 test", prog);
 }
 
-fn cmd_keygen(args: &[String]) {
+fn cmd_keygen<T: SignatureScheme>(args: &[String]) {
     let save_to_files = args.contains(&"--save".to_string());
     let show_secret = args.contains(&"--show-secret".to_string());
 
     let (pk, mut sk) = if let Some(pos) = args.iter().position(|a| a == "--seed") {
         if pos + 1 < args.len() {
-            let hex = &args[pos + 1];
-            let bytes = hex::decode(hex).expect("Invalid hex seed");
-            if bytes.len() != 32 {
-                eprintln!("Seed must be exactly 32 bytes (64 hex chars)");
+            let hex_str = &args[pos + 1];
+            let mut bytes = hex::decode(hex_str).expect("Invalid hex seed");
+            if bytes.len() != T::SEED_LEN {
+                eprintln!(
+                    "Seed must be exactly {} bytes ({} hex chars) for {}",
+                    T::SEED_LEN,
+                    T::SEED_LEN * 2,
+                    T::NAME
+                );
+                zeroize_bytes(&mut bytes);
                 return;
             }
-            let mut seed = [0u8; 32];
-            seed.copy_from_slice(&bytes);
-            let result = MlDsa44::keypair_from_seed(&seed).expect("Key generation failed");
-            zeroize_bytes(&mut seed);
+            let result = T::keypair_from_seed(&bytes).expect("Key generation failed");
+            zeroize_bytes(&mut bytes);
             result
         } else {
             eprintln!("Missing seed value");
             return;
         }
     } else {
-        MlDsa44::keypair().expect("Key generation failed")
+        T::keypair().expect("Key generation failed")
     };
 
     if save_to_files {
-        fs::write("pk.bin", pk).expect("Failed to write public key");
-        fs::write("sk.bin", sk).expect("Failed to write secret key");
+        fs::write("pk.bin", pk.as_ref()).expect("Failed to write public key");
+        fs::write("sk.bin", sk.as_ref()).expect("Failed to write secret key");
         // Best-effort: restrict sk.bin to owner read/write only. On a
         // world-readable umask this file would otherwise be exposed to
         // every local user, which defeats the point of hardened storage.
@@ -94,19 +153,21 @@ fn cmd_keygen(args: &[String]) {
     }
 
     println!("======================================================================");
-    println!("  ML-DSA-44 KEYPAIR");
+    println!("  {} KEYPAIR", T::NAME);
     println!("======================================================================");
-    println!("  Algorithm: ML-DSA-44 (FIPS 204)");
-    println!("  Security:  Category 2 (128-bit classical, 64-bit quantum)");
+    println!("  Algorithm: {} (FIPS 204)", T::NAME);
     println!();
-    println!("  PUBLIC KEY ({} bytes):", PUBLICKEYBYTES);
-    println!("  {}", hex_encode(&pk));
+    println!("  PUBLIC KEY ({} bytes):", T::PUBLIC_KEY_LEN);
+    println!("  {}", hex_encode(pk.as_ref()));
 
     if show_secret {
         println!();
-        println!("  SECRET KEY ({} bytes) — visible because --show-secret was passed.", SECRETKEYBYTES);
+        println!(
+            "  SECRET KEY ({} bytes) — visible because --show-secret was passed.",
+            T::SECRET_KEY_LEN
+        );
         println!("  This will remain in your terminal scrollback/logs. Prefer --save instead.");
-        println!("  {}", hex_encode(&sk));
+        println!("  {}", hex_encode(sk.as_ref()));
     } else if !save_to_files {
         println!();
         println!("  Secret key generated but NOT printed (avoids leaving it in scrollback/logs).");
@@ -114,10 +175,10 @@ fn cmd_keygen(args: &[String]) {
     }
     println!("======================================================================");
 
-    zeroize_bytes(&mut sk);
+    zeroize_bytes(sk.as_mut());
 }
 
-fn cmd_sign(args: &[String]) {
+fn cmd_sign<T: SignatureScheme>(args: &[String]) {
     let mut sk_hex = String::new();
     let mut sk_file: Option<String> = None;
     let mut message = String::new();
@@ -149,40 +210,38 @@ fn cmd_sign(args: &[String]) {
     let mut sk_bytes = if let Some(path) = sk_file {
         fs::read(&path).expect("Failed to read secret key file")
     } else {
-        let bytes = hex::decode(&sk_hex).expect("Invalid secret key hex");
         // The hex string itself (sk_hex, and args[i] it was cloned from)
         // still lives in the process's argv/environment for the process
         // lifetime — that's an OS-level exposure this program cannot
         // clear. We can and do clear our own decoded copy below.
-        bytes
+        hex::decode(&sk_hex).expect("Invalid secret key hex")
     };
-    if sk_bytes.len() != SECRETKEYBYTES {
-        eprintln!("Secret key must be exactly {} bytes", SECRETKEYBYTES);
+    if sk_bytes.len() != T::SECRET_KEY_LEN {
+        eprintln!("Secret key must be exactly {} bytes for {}", T::SECRET_KEY_LEN, T::NAME);
         zeroize_bytes(&mut sk_bytes);
         return;
     }
-    let mut sk = [0u8; SECRETKEYBYTES];
-    sk.copy_from_slice(&sk_bytes);
+    let mut sk = T::secret_key_from_bytes(&sk_bytes).expect("Secret key parse failed");
     zeroize_bytes(&mut sk_bytes);
 
-    let sig = MlDsa44::sign(&sk, message.as_bytes()).expect("Signing failed");
-    zeroize_bytes(&mut sk);
+    let sig = T::sign(&sk, message.as_bytes()).expect("Signing failed");
+    zeroize_bytes(sk.as_mut());
 
     if let Some(path) = sig_file {
-        fs::write(&path, sig).expect("Failed to write signature");
+        fs::write(&path, sig.as_ref()).expect("Failed to write signature");
         println!("Signature saved to {}", path);
     }
 
     println!("======================================================================");
-    println!("  ML-DSA-44 SIGNATURE");
+    println!("  {} SIGNATURE", T::NAME);
     println!("======================================================================");
     println!("  Message: \"{}\"", message);
-    println!("  Signature ({} bytes):", SIGNBYTES);
-    println!("  {}", hex_encode(&sig));
+    println!("  Signature ({} bytes):", T::SIGNATURE_LEN);
+    println!("  {}", hex_encode(sig.as_ref()));
     println!("======================================================================");
 }
 
-fn cmd_verify(args: &[String]) {
+fn cmd_verify<T: SignatureScheme>(args: &[String]) {
     let mut pk_hex = String::new();
     let mut message = String::new();
     let mut sig_hex = String::new();
@@ -222,7 +281,6 @@ fn cmd_verify(args: &[String]) {
         i += 1;
     }
 
-    // Load from files if specified
     let pk_bytes = if let Some(path) = pk_file {
         fs::read(&path).expect("Failed to read public key file")
     } else if !pk_hex.is_empty() {
@@ -250,17 +308,36 @@ fn cmd_verify(args: &[String]) {
         return;
     };
 
-    let mut pk = [0u8; PUBLICKEYBYTES];
-    pk.copy_from_slice(&pk_bytes);
-    
-    let mut sig = [0u8; SIGNBYTES];
-    sig.copy_from_slice(&sig_bytes);
-    
+    let pk = match T::public_key_from_bytes(&pk_bytes) {
+        Some(pk) => pk,
+        None => {
+            eprintln!(
+                "Public key must be exactly {} bytes for {} (got {})",
+                T::PUBLIC_KEY_LEN,
+                T::NAME,
+                pk_bytes.len()
+            );
+            return;
+        }
+    };
+    let sig = match T::signature_from_bytes(&sig_bytes) {
+        Some(sig) => sig,
+        None => {
+            eprintln!(
+                "Signature must be exactly {} bytes for {} (got {})",
+                T::SIGNATURE_LEN,
+                T::NAME,
+                sig_bytes.len()
+            );
+            return;
+        }
+    };
+
     println!("======================================================================");
-    println!("  ML-DSA-44 VERIFICATION");
+    println!("  {} VERIFICATION", T::NAME);
     println!("======================================================================");
-    
-    match MlDsa44::verify(&pk, &msg_bytes, &sig) {
+
+    match T::verify(&pk, &msg_bytes, &sig) {
         Ok(true) => {
             println!("  Status:  ✓ VALID");
             println!("  Message: \"{}\"", String::from_utf8_lossy(&msg_bytes));
@@ -285,62 +362,55 @@ fn hex_encode(data: &[u8]) -> String {
         .join("\n  ")
 }
 
-fn test_all() {
+fn test_all<T: SignatureScheme>() {
     println!("======================================================================");
-    println!("  ML-DSA-44 SELF-TEST (FIPS 204)");
+    println!("  {} SELF-TEST (FIPS 204)", T::NAME);
     println!("======================================================================");
-    println!("  Parameters:");
-    println!("    Module Rank: K={}, L={}", K, L);
-    println!("    Degree: N={}", N);
-    println!("    Modulus: Q={}", Q);
-    println!("    ETA={}, TAU={}, BETA={}", ETA, TAU, BETA);
-    println!("    GAMMA1={}, GAMMA2={}", GAMMA1, GAMMA2);
-    println!("    OMEGA={}, LAMBDA={}", OMEGA, LAMBDA);
+    println!("  Public Key:  {} bytes", T::PUBLIC_KEY_LEN);
+    println!("  Secret Key:  {} bytes", T::SECRET_KEY_LEN);
+    println!("  Signature:   {} bytes", T::SIGNATURE_LEN);
     println!();
-    
-    // Key generation
+
     println!("  [1/4] Key Generation...");
-    let (pk, sk) = MlDsa44::keypair().unwrap();
-    println!("    ✓ Public key:  {} bytes", pk.len());
-    println!("    ✓ Secret key:  {} bytes", sk.len());
-    println!("    PK (first 32): {}...", hex_encode(&pk[..32]));
-    
-    // Sign
+    let (pk, sk) = T::keypair().unwrap();
+    println!("    ✓ Public key:  {} bytes", pk.as_ref().len());
+    println!("    ✓ Secret key:  {} bytes", sk.as_ref().len());
+    println!("    PK (first 32): {}...", hex_encode(&pk.as_ref()[..32]));
+
     println!();
     println!("  [2/4] Signing...");
-    let msg = b"ML-DSA-44 FIPS 204 test vector";
-    let sig = MlDsa44::sign(&sk, msg).unwrap();
-    println!("    ✓ Message: \"{}\"", String::from_utf8_lossy(msg));
-    println!("    ✓ Signature: {} bytes", sig.len());
-    println!("    Sig (first 32): {}...", hex_encode(&sig[..32]));
-    
-    // Verify
+    let msg = format!("{} FIPS 204 test vector", T::NAME);
+    let sig = T::sign(&sk, msg.as_bytes()).unwrap();
+    println!("    ✓ Message: \"{}\"", msg);
+    println!("    ✓ Signature: {} bytes", sig.as_ref().len());
+    println!("    Sig (first 32): {}...", hex_encode(&sig.as_ref()[..32]));
+
     println!();
     println!("  [3/4] Verification...");
-    match MlDsa44::verify(&pk, msg, &sig) {
+    match T::verify(&pk, msg.as_bytes(), &sig) {
         Ok(true) => println!("    ✓ VALID - Signature verified successfully"),
         Ok(false) => println!("    ✗ INVALID - Verification failed"),
         Err(e) => println!("    ✗ ERROR - {}", e),
     }
-    
-    // Reject tampered
+
     println!();
     println!("  [4/4] Tamper Detection...");
     let wrong_msg = b"tampered message";
-    match MlDsa44::verify(&pk, wrong_msg, &sig) {
+    match T::verify(&pk, wrong_msg, &sig) {
         Ok(false) => println!("    ✓ Correctly rejected wrong message"),
         Ok(true) => println!("    ✗ FAILED - Accepted wrong message!"),
         Err(_) => println!("    ✓ Rejected with error"),
     }
-    
-    let mut bad_sig = sig;
-    bad_sig[0] ^= 0xFF;
-    match MlDsa44::verify(&pk, msg, &bad_sig) {
+
+    let mut bad_sig_bytes = sig.as_ref().to_vec();
+    bad_sig_bytes[0] ^= 0xFF;
+    let bad_sig = T::signature_from_bytes(&bad_sig_bytes).unwrap();
+    match T::verify(&pk, msg.as_bytes(), &bad_sig) {
         Ok(false) => println!("    ✓ Correctly rejected tampered signature"),
         Ok(true) => println!("    ✗ FAILED - Accepted tampered signature!"),
         Err(_) => println!("    ✓ Rejected with error"),
     }
-    
+
     println!();
     println!("  All tests passed! ✓");
     println!("======================================================================");

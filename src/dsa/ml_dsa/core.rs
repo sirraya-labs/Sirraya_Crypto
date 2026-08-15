@@ -709,6 +709,7 @@ pub enum MlDsaError {
     InvalidPublicKeyLength,
     InvalidSecretKeyLength,
     InvalidSignatureLength,
+    InvalidSeedLength,
     MalformedSignature,
     VerificationFailed,
 }
@@ -719,6 +720,7 @@ impl core::fmt::Display for MlDsaError {
             MlDsaError::InvalidPublicKeyLength => write!(f, "invalid public key length"),
             MlDsaError::InvalidSecretKeyLength => write!(f, "invalid secret key length"),
             MlDsaError::InvalidSignatureLength => write!(f, "invalid signature length"),
+            MlDsaError::InvalidSeedLength => write!(f, "invalid seed length"),
             MlDsaError::MalformedSignature => write!(f, "malformed signature"),
             MlDsaError::VerificationFailed => write!(f, "signature verification failed"),
         }
@@ -1779,9 +1781,16 @@ impl $crate::traits::SignatureScheme for $Variant {
     const PUBLIC_KEY_LEN: usize = PUBLICKEYBYTES;
     const SECRET_KEY_LEN: usize = SECRETKEYBYTES;
     const SIGNATURE_LEN: usize = SIGNBYTES;
+    const SEED_LEN: usize = SEEDBYTES;
 
     fn keypair() -> Result<(Self::PublicKey, Self::SecretKey), Self::Error> {
         $Variant::keypair()
+    }
+    fn keypair_from_seed(seed: &[u8]) -> Result<(Self::PublicKey, Self::SecretKey), Self::Error> {
+        let seed: &[u8; SEEDBYTES] = seed
+            .try_into()
+            .map_err(|_| MlDsaError::InvalidSeedLength)?;
+        $Variant::keypair_from_seed(seed)
     }
     fn sign(sk: &Self::SecretKey, msg: &[u8]) -> Result<Self::Signature, Self::Error> {
         $Variant::sign(sk, msg)
@@ -1792,6 +1801,16 @@ impl $crate::traits::SignatureScheme for $Variant {
         sig: &Self::Signature,
     ) -> Result<bool, Self::Error> {
         $Variant::verify(pk, msg, sig)
+    }
+
+    fn public_key_from_bytes(bytes: &[u8]) -> Option<Self::PublicKey> {
+        bytes.try_into().ok()
+    }
+    fn secret_key_from_bytes(bytes: &[u8]) -> Option<Self::SecretKey> {
+        bytes.try_into().ok()
+    }
+    fn signature_from_bytes(bytes: &[u8]) -> Option<Self::Signature> {
+        bytes.try_into().ok()
     }
 }
 

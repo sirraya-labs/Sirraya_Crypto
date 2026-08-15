@@ -24,3 +24,4 @@ pub mod hybrid;
 pub mod traits;
 
 pub use dsa::ml_dsa::MlDsa44;
+pub use dsa::ml_dsa::MlDsa65;
