@@ -274,6 +274,34 @@ pub fn rej_ntt_poly(rho: &[u8; SEEDBYTES], col: u8, row: u8) -> Poly {
     poly
 }
 
+/// CoeffFromHalfByte — Algorithm 15. FIPS 204 defines two genuinely
+/// different rules depending on η (not just a bound change), so this
+/// branches on it explicitly rather than pretending one formula covers
+/// both. Only η=2 and η=4 appear across ML-DSA-44/65/87 (FIPS 204 Table
+/// 1), so the match is exhaustive; ETA is a per-variant const, so the
+/// dead branch is compiled away.
+#[inline(always)]
+fn coeff_from_half_byte(b: i32) -> Option<i32> {
+    if ETA == 2 {
+        // η=2: reject if b ≥ 15, else 2 − (b mod 5). (205*b)>>10 is a
+        // branchless mod-5 for b < 16.
+        if b < 15 {
+            Some(2 - (b - (205 * b >> 10) * 5))
+        } else {
+            None
+        }
+    } else if ETA == 4 {
+        // η=4: reject if b ≥ 9, else 4 − b.
+        if b < 9 {
+            Some(4 - b)
+        } else {
+            None
+        }
+    } else {
+        unreachable!("ML-DSA only defines η=2 or η=4 (FIPS 204 Table 1)")
+    }
+}
+
 /// RejBoundedPoly — Algorithm 31.
 /// Samples a ∈ R with coefficients in [−η, η] from a 66-byte seed.
 pub fn rej_bounded_poly(seed66: &[u8; 66]) -> Poly {
@@ -287,51 +315,41 @@ pub fn rej_bounded_poly(seed66: &[u8; 66]) -> Poly {
     while ctr < N {
         reader.read(&mut byte); // Alg 31 line 5
         let z = byte[0] as i32;
-        // CoeffFromHalfByte (Algorithm 15, η=2): b mod 5; reject if b ≥ 15
         let z0 = z & 0x0F;
         let z1 = z >> 4;
-        if z0 < 15 {
-            // Alg 15 line 1
-            poly.coeffs[ctr] = 2 - (z0 - (205 * z0 >> 10) * 5); // 2 − (z0 mod 5)
+        if let Some(c) = coeff_from_half_byte(z0) {
+            poly.coeffs[ctr] = c;
             ctr += 1;
         }
-        if ctr < N && z1 < 15 {
-            poly.coeffs[ctr] = 2 - (z1 - (205 * z1 >> 10) * 5);
-            ctr += 1;
+        if ctr < N {
+            if let Some(c) = coeff_from_half_byte(z1) {
+                poly.coeffs[ctr] = c;
+                ctr += 1;
+            }
         }
     }
     poly
 }
 
 /// ExpandMask — Algorithm 34.
-/// For ML-DSA-44: γ₁ = 2^17, so c = 1 + bitlen(γ₁−1) = 18
-/// Samples y[r] ∈ R with coefficients in [−γ₁+1, γ₁]
+/// Samples y[r] ∈ R with coefficients in [−γ₁+1, γ₁]. The output encoding
+/// is exactly BitPack(·, γ₁−1, γ₁) — the same encoding `polyz_unpack`
+/// implements — so this squeezes the XOF straight into a
+/// POLYZ_PACKEDBYTES buffer (= 32·c bytes, Alg 34 line 4, for whichever c
+/// this parameter set's γ₁ needs) and reuses it instead of duplicating
+/// the bit-packing logic a second time.
 pub fn expand_mask_poly(rho_prime: &[u8; RHO_PRIME_BYTES], nonce: u16) -> Poly {
     // Alg 34 line 3: ρ′ = ρ″ || IntegerToBytes(μ+r, 2)
     let n_lo = (nonce & 0xFF) as u8;
     let n_hi = (nonce >> 8) as u8;
-    // ML-DSA-44: c=18, so 32*18 = 576 bytes (Alg 34 line 4)
-    let mut buf = [0u8; 576];
+    let mut buf = [0u8; POLYZ_PACKEDBYTES];
     {
         let mut h = Shake256::default();
         h.update(rho_prime);
         h.update(&[n_lo, n_hi]);
         h.finalize_xof().read(&mut buf);
     }
-    // Pack 4 coefficients into 9 bytes (4 × 18 bits = 72 bits)
-    let mut poly = Poly::zero();
-    for i in 0..(N / 4) {
-        let b = i * 9;
-        let v0 = (buf[b] as u32) | ((buf[b + 1] as u32) << 8) | ((buf[b + 2] as u32 & 0x03) << 16);
-        let v1 = ((buf[b + 2] as u32) >> 2) | ((buf[b + 3] as u32) << 6) | ((buf[b + 4] as u32 & 0x0F) << 14);
-        let v2 = ((buf[b + 4] as u32) >> 4) | ((buf[b + 5] as u32) << 4) | ((buf[b + 6] as u32 & 0x3F) << 12);
-        let v3 = ((buf[b + 6] as u32) >> 6) | ((buf[b + 7] as u32) << 2) | ((buf[b + 8] as u32) << 10);
-        poly.coeffs[4 * i] = GAMMA1 - v0 as i32;
-        poly.coeffs[4 * i + 1] = GAMMA1 - v1 as i32;
-        poly.coeffs[4 * i + 2] = GAMMA1 - v2 as i32;
-        poly.coeffs[4 * i + 3] = GAMMA1 - v3 as i32;
-    }
-    poly
+    polyz_unpack(&buf)
 }
 
 /// SampleInBall — Algorithm 29.
@@ -463,86 +481,103 @@ pub fn polyt0_unpack(buf: &[u8; POLYT0_PACKEDBYTES]) -> Poly {
     p
 }
 
-// ---- s1/s2: BitPack(s, η, η) — 3 bits per coeff (η=2) — Algorithm 24 ----
-pub fn polyeta_pack(buf: &mut [u8; POLYETA_PACKEDBYTES], p: &Poly) {
-    for i in 0..(N / 8) {
-        let t: [u8; 8] = core::array::from_fn(|j| (ETA - p.coeffs[8 * i + j]) as u8);
-        let b = i * 3;
-        buf[b] = t[0] | (t[1] << 3) | (t[2] << 6);
-        buf[b + 1] = (t[2] >> 2) | (t[3] << 1) | (t[4] << 4) | (t[5] << 7);
-        buf[b + 2] = (t[5] >> 1) | (t[6] << 2) | (t[7] << 5);
+// ---- Generic fixed-width coefficient packing (underlies Algorithms 24,
+// 26, 28) ----
+//
+// Every BitPack in FIPS 204 packs N=256 coefficients at some constant
+// bits-per-coefficient width, sequentially, LSB-first. The width differs
+// by field and parameter set (η, γ₁, γ₂), but is always exactly
+// `PACKEDBYTES * 8 / N` for whichever *_PACKEDBYTES constant governs that
+// field — and those constants are already computed correctly per
+// parameter set in each variant's constants.rs. Packing generically here
+// off that derived width — instead of hand-unrolling fixed bit-shifts for
+// one specific width, as this used to do — means polyeta_pack/polyz_pack/
+// polyw1_pack are correct for every η/γ₁/γ₂ FIPS 204 defines, not only
+// ML-DSA-44's. (For ML-DSA-44 specifically this produces byte-identical
+// output to the old hand-unrolled version — verified by inspection against
+// the previous 3-bit/18-bit/6-bit expansions.)
+#[inline(always)]
+fn bitpack_coeffs(buf: &mut [u8], values: &[u32; N], bits: u32) {
+    let mut acc: u64 = 0;
+    let mut acc_bits: u32 = 0;
+    let mut out = 0usize;
+    for &v in values.iter() {
+        acc |= (v as u64) << acc_bits;
+        acc_bits += bits;
+        while acc_bits >= 8 {
+            buf[out] = (acc & 0xFF) as u8;
+            acc >>= 8;
+            acc_bits -= 8;
+            out += 1;
+        }
     }
+    debug_assert_eq!(acc_bits, 0, "PACKEDBYTES*8 must equal N*bits exactly");
+}
+#[inline(always)]
+fn bitunpack_coeffs(buf: &[u8], values: &mut [u32; N], bits: u32) {
+    let mask: u64 = (1u64 << bits) - 1;
+    let mut acc: u64 = 0;
+    let mut acc_bits: u32 = 0;
+    let mut in_pos = 0usize;
+    for v in values.iter_mut() {
+        while acc_bits < bits {
+            acc |= (buf[in_pos] as u64) << acc_bits;
+            acc_bits += 8;
+            in_pos += 1;
+        }
+        *v = (acc & mask) as u32;
+        acc >>= bits;
+        acc_bits -= bits;
+    }
+}
+
+// ---- s1/s2: BitPack(s, η, η) — Algorithm 24 ----
+// Bit width = POLYETA_PACKEDBYTES*8/N: 3 bits for η=2 (ML-DSA-44/87),
+// 4 bits for η=4 (ML-DSA-65).
+pub fn polyeta_pack(buf: &mut [u8; POLYETA_PACKEDBYTES], p: &Poly) {
+    const BITS: u32 = (POLYETA_PACKEDBYTES * 8 / N) as u32;
+    let values: [u32; N] = core::array::from_fn(|j| (ETA - p.coeffs[j]) as u32);
+    bitpack_coeffs(buf, &values, BITS);
 }
 pub fn polyeta_unpack(buf: &[u8; POLYETA_PACKEDBYTES]) -> Poly {
+    const BITS: u32 = (POLYETA_PACKEDBYTES * 8 / N) as u32;
+    let mut values = [0u32; N];
+    bitunpack_coeffs(buf, &mut values, BITS);
     let mut p = Poly::zero();
-    for i in 0..(N / 8) {
-        let b = i * 3;
-        let (b0, b1, b2) = (buf[b] as i32, buf[b + 1] as i32, buf[b + 2] as i32);
-        p.coeffs[8 * i] = ETA - (b0 & 0x07);
-        p.coeffs[8 * i + 1] = ETA - ((b0 >> 3) & 0x07);
-        p.coeffs[8 * i + 2] = ETA - ((b0 >> 6) | ((b1 & 0x01) << 2));
-        p.coeffs[8 * i + 3] = ETA - ((b1 >> 1) & 0x07);
-        p.coeffs[8 * i + 4] = ETA - ((b1 >> 4) & 0x07);
-        p.coeffs[8 * i + 5] = ETA - ((b1 >> 7) | ((b2 & 0x03) << 1));
-        p.coeffs[8 * i + 6] = ETA - ((b2 >> 2) & 0x07);
-        p.coeffs[8 * i + 7] = ETA - ((b2 >> 5) & 0x07);
+    for j in 0..N {
+        p.coeffs[j] = ETA - values[j] as i32;
     }
     p
 }
 
-// ---- z: BitPack(z, γ₁−1, γ₁) — 18 bits per coeff for ML-DSA-44 — Algorithm 26 ----
+// ---- z: BitPack(z, γ₁−1, γ₁) — Algorithm 26 ----
+// Bit width = POLYZ_PACKEDBYTES*8/N: 18 bits for γ₁=2^17 (ML-DSA-44),
+// 20 bits for γ₁=2^19 (ML-DSA-65/87).
 pub fn polyz_pack(buf: &mut [u8; POLYZ_PACKEDBYTES], p: &Poly) {
-    // ML-DSA-44: gamma1 = 2^17, 18 bits per coefficient
-    // 4 coefficients × 18 bits = 72 bits = 9 bytes
-    for i in 0..(N / 4) {
-        let v0 = (GAMMA1 - p.coeffs[4 * i]) as u32 & 0x3FFFF;
-        let v1 = (GAMMA1 - p.coeffs[4 * i + 1]) as u32 & 0x3FFFF;
-        let v2 = (GAMMA1 - p.coeffs[4 * i + 2]) as u32 & 0x3FFFF;
-        let v3 = (GAMMA1 - p.coeffs[4 * i + 3]) as u32 & 0x3FFFF;
-        let b = i * 9;
-        buf[b] = v0 as u8;
-        buf[b + 1] = (v0 >> 8) as u8;
-        buf[b + 2] = (v0 >> 16 | v1 << 2) as u8;
-        buf[b + 3] = (v1 >> 6) as u8;
-        buf[b + 4] = (v1 >> 14 | v2 << 4) as u8;
-        buf[b + 5] = (v2 >> 4) as u8;
-        buf[b + 6] = (v2 >> 12 | v3 << 6) as u8;
-        buf[b + 7] = (v3 >> 2) as u8;
-        buf[b + 8] = (v3 >> 10) as u8;
-    }
+    const BITS: u32 = (POLYZ_PACKEDBYTES * 8 / N) as u32;
+    let mask: u32 = (1u32 << BITS) - 1;
+    let values: [u32; N] = core::array::from_fn(|j| (GAMMA1 - p.coeffs[j]) as u32 & mask);
+    bitpack_coeffs(buf, &values, BITS);
 }
 pub fn polyz_unpack(buf: &[u8; POLYZ_PACKEDBYTES]) -> Poly {
+    const BITS: u32 = (POLYZ_PACKEDBYTES * 8 / N) as u32;
+    let mut values = [0u32; N];
+    bitunpack_coeffs(buf, &mut values, BITS);
     let mut p = Poly::zero();
-    for i in 0..(N / 4) {
-        let b = i * 9;
-        let v0 = (buf[b] as u32) | ((buf[b + 1] as u32) << 8) | ((buf[b + 2] as u32 & 0x03) << 16);
-        let v1 = ((buf[b + 2] as u32) >> 2) | ((buf[b + 3] as u32) << 6) | ((buf[b + 4] as u32 & 0x0F) << 14);
-        let v2 = ((buf[b + 4] as u32) >> 4) | ((buf[b + 5] as u32) << 4) | ((buf[b + 6] as u32 & 0x3F) << 12);
-        let v3 = ((buf[b + 6] as u32) >> 6) | ((buf[b + 7] as u32) << 2) | ((buf[b + 8] as u32) << 10);
-        p.coeffs[4 * i] = GAMMA1 - v0 as i32;
-        p.coeffs[4 * i + 1] = GAMMA1 - v1 as i32;
-        p.coeffs[4 * i + 2] = GAMMA1 - v2 as i32;
-        p.coeffs[4 * i + 3] = GAMMA1 - v3 as i32;
+    for j in 0..N {
+        p.coeffs[j] = GAMMA1 - values[j] as i32;
     }
     p
 }
 
-// ---- w1: SimpleBitPack(w1, (q-1)/(2γ₂)−1) — 6 bits per coeff for ML-DSA-44 — Algorithm 28 ----
+// ---- w1: SimpleBitPack(w1, (q-1)/(2γ₂)−1) — Algorithm 28 ----
+// Bit width = POLYW1_PACKEDBYTES*8/N: 6 bits for γ₂=(q-1)/88 (ML-DSA-44),
+// 4 bits for γ₂=(q-1)/32 (ML-DSA-65/87).
 pub fn polyw1_pack(buf: &mut [u8; POLYW1_PACKEDBYTES], p: &Poly) {
-    // ML-DSA-44: (q-1)/(2*gamma2) = (q-1)/(2*(q-1)/88) = 44, max value = 43, needs 6 bits
-    // 4 coefficients × 6 bits = 24 bits = 3 bytes
-    for i in 0..(N / 4) {
-        let t = [
-            p.coeffs[4 * i] as u8 & 0x3F,
-            p.coeffs[4 * i + 1] as u8 & 0x3F,
-            p.coeffs[4 * i + 2] as u8 & 0x3F,
-            p.coeffs[4 * i + 3] as u8 & 0x3F,
-        ];
-        let b = i * 3;
-        buf[b] = t[0] | (t[1] << 6);
-        buf[b + 1] = (t[1] >> 2) | (t[2] << 4);
-        buf[b + 2] = (t[2] >> 4) | (t[3] << 2);
-    }
+    const BITS: u32 = (POLYW1_PACKEDBYTES * 8 / N) as u32;
+    let mask: u32 = (1u32 << BITS) - 1;
+    let values: [u32; N] = core::array::from_fn(|j| p.coeffs[j] as u32 & mask);
+    bitpack_coeffs(buf, &values, BITS);
 }
 
 // ---- HintBitPack / HintBitUnpack — Algorithms 20 & 21 ----

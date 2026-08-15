@@ -22,5 +22,7 @@
 
 pub mod core;
 pub mod ml_dsa_44;
+pub mod ml_dsa_65;
 
 pub use ml_dsa_44::MlDsa44;
+pub use ml_dsa_65::MlDsa65;

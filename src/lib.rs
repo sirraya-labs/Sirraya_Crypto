@@ -15,29 +15,12 @@
 //! Adding ML-DSA-65/87, or an unrelated algorithm family like SLH-DSA, is
 //! additive from here — see the module docs on [`dsa`] and [`dsa::ml_dsa`].
 //!
-//! # Backward compatibility
-//! The pre-refactor flat API (`constants_44`, `polynomial`, `mldsa44`,
-//! `MlDsa44` all at the crate root) still works unchanged — see the
-//! re-exports below. New code should prefer the paths under [`dsa`].
+//! Not yet published, so there is exactly one API surface: the paths
+//! below. Nothing aliases a flat/legacy layout.
 
 pub mod common;
 pub mod dsa;
 pub mod hybrid;
 pub mod traits;
-
-// ---------------------------------------------------------------------------
-// Backward-compatible surface — pre-refactor call sites keep compiling.
-// ---------------------------------------------------------------------------
-
-/// Alias of [`dsa::ml_dsa::ml_dsa_44`] under its old module name.
-pub use dsa::ml_dsa::ml_dsa_44 as mldsa44;
-/// Alias of [`dsa::ml_dsa::ml_dsa_44::constants`] under its old module name.
-pub use dsa::ml_dsa::ml_dsa_44::constants as constants_44;
-/// Alias of [`common::ring`] under its old module name. Note: the
-/// parameter-dependent packing/sampling functions that used to live here
-/// (`polyeta_pack`, `sample_in_ball`, etc.) now live per-variant in e.g.
-/// [`mldsa44`] instead of in this shared module — see `common::ring`'s and
-/// `dsa::ml_dsa::core`'s module docs for why.
-pub use common::ring as polynomial;
 
 pub use dsa::ml_dsa::MlDsa44;

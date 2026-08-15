@@ -13,8 +13,8 @@
 use std::env;
 use std::fs;
 
-use sirraya_ml_dsa_44::constants_44::*;
-use sirraya_ml_dsa_44::polynomial::zeroize_bytes;
+use sirraya_ml_dsa_44::common::ring::zeroize_bytes;
+use sirraya_ml_dsa_44::dsa::ml_dsa::ml_dsa_44::constants::*;
 use sirraya_ml_dsa_44::MlDsa44;
 
 fn main() {
