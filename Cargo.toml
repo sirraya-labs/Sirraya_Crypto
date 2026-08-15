@@ -1,54 +1,35 @@
 [package]
-name = "sirraya-ml-dsa-44"
+name = "sirraya-crypto"
 version = "0.1.0"
 edition = "2021"
-description = "ML-DSA-44 Post-Quantum Digital Signatures (FIPS 204) with W3C Verifiable Credentials"
+description = "Post-quantum & hybrid digital signatures (FIPS 204 ML-DSA family)"
 license = "MIT"
 authors = ["Sirraya Labs"]
-repository = "https://github.com/sirraya-labs/sirraya-ml-dsa-44"
+repository = "https://github.com/sirraya-labs/sirraya_crypto"
 
 [dependencies]
-# Core cryptographic
-sha3 = "0.10"
-sha2 = "0.10"
-rand_core = { version = "0.6", features = ["std"] }
-
-# Always available
-serde_json = "1.0"
-hex = "0.4.3"
-bs58 = "0.5"
-
-# Optional for W3C VC support
-serde = { version = "1.0", features = ["derive"], optional = true }
-base64 = { version = "0.22", optional = true }
-multibase = { version = "0.9", optional = true }
-uuid = { version = "1.5", features = ["serde", "v4"], optional = true }
-chrono = { version = "0.4", features = ["serde"], optional = true }
-
-[dev-dependencies]
-tempfile = "3.8"
+sha3 = "0.10"                                             # SHAKE128/256 (FIPS 204 §3.7)
+rand_core = { version = "0.6", features = ["getrandom"] } # OsRng for KeyGen (Alg 1)
+hex = "0.4.3"                                             # CLI key/sig encoding
 
 [features]
-default = ["std"]
-std = []
+default = []
+# Prints raw secret-key material (s1, s2, t0, K seed, tr) to stdout —
+# unconditional secret exposure into scrollback/logs/CI. Off by default so
+# a downstream `cargo add sirraya-crypto` can't reach it by accident, and
+# so dependency-review tooling flags it if a consumer ever turns it on.
+# See dsa::ml_dsa::core::diagnostic's module doc.
+diagnostic-unsafe = []
+# Reserved for masked (side-channel-hardened) implementations of the
+# sampling/packing gadgets. No additional dependencies yet — enable and
+# extend as that work lands.
 masking = []
-
-w3c = [
-    "dep:serde",
-    "dep:base64",
-    "dep:uuid",
-    "dep:chrono",
-    "dep:multibase",
-]
 
 [profile.release]
 opt-level = 3
 lto = true
 codegen-units = 1
 
-
-# ============ BINARIES ============
 [[bin]]
-name = "ml-dsa-44"
+name = "sirraya-crypto"
 path = "src/main.rs"
-

@@ -1,4 +1,4 @@
-//! sirraya-ml-dsa-44 — FIPS 204 ML-DSA post-quantum signatures.
+//! sirraya-crypto — post-quantum & hybrid signature primitives (FIPS 204 ML-DSA family, more to come).
 //!
 //! # Layout (crypto-agility)
 //! - [`traits`] — the `SignatureScheme` trait every algorithm in this crate

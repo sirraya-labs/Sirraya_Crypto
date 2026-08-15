@@ -22,9 +22,9 @@
 use std::env;
 use std::fs;
 
-use sirraya_ml_dsa_44::common::ring::zeroize_bytes;
-use sirraya_ml_dsa_44::traits::SignatureScheme;
-use sirraya_ml_dsa_44::{MlDsa44, MlDsa65};
+use sirraya_crypto::common::ring::zeroize_bytes;
+use sirraya_crypto::traits::SignatureScheme;
+use sirraya_crypto::{MlDsa44, MlDsa65};
 
 #[derive(Clone, Copy)]
 enum Algorithm {
