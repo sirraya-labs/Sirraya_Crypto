@@ -24,7 +24,6 @@ base64 = { version = "0.22", optional = true }
 multibase = { version = "0.9", optional = true }
 uuid = { version = "1.5", features = ["serde", "v4"], optional = true }
 chrono = { version = "0.4", features = ["serde"], optional = true }
-rand = "0.10.2"
 
 [dev-dependencies]
 tempfile = "3.8"

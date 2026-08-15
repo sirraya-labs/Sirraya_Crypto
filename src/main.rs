@@ -12,14 +12,10 @@
 //    `--show-secret` if you really want it on the terminal.
 use std::env;
 use std::fs;
-use polynomial::zeroize_bytes;
 
-mod constants_44;
-mod polynomial;
-mod mldsa44;
-
-use mldsa44::MlDsa44;
-use constants_44::*;
+use sirraya_ml_dsa_44::constants_44::*;
+use sirraya_ml_dsa_44::polynomial::zeroize_bytes;
+use sirraya_ml_dsa_44::MlDsa44;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
