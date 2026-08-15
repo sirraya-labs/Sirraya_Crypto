@@ -1,6 +1,6 @@
 [package]
 name = "sirraya-crypto"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Post-quantum & hybrid digital signatures (FIPS 204 ML-DSA family)"
 license = "MIT"
@@ -11,6 +11,10 @@ repository = "https://github.com/sirraya-labs/sirraya_crypto"
 sha3 = "0.10"                                             # SHAKE128/256 (FIPS 204 §3.7)
 rand_core = { version = "0.6", features = ["getrandom"] } # OsRng for KeyGen (Alg 1)
 hex = "0.4.3"                                             # CLI key/sig encoding
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] } # ACVP KAT vector parsing (tests/acvp_kat.rs)
+serde_json = "1"                                 # ACVP KAT vector parsing (tests/acvp_kat.rs)
 
 [features]
 default = []
@@ -24,6 +28,14 @@ diagnostic-unsafe = []
 # sampling/packing gadgets. No additional dependencies yet — enable and
 # extend as that work lands.
 masking = []
+
+[[test]]
+name = "acvp_kat"
+path = "tests/acvp_kat.rs"
+# ACVP KAT vectors (tests/vectors/*.json) are ~2.5 MB total — this test
+# target is separate from the default lib/bin unit tests so `cargo test`
+# still runs it (autotests would too, but this is explicit since the crate
+# sets autotests = false via the [package] defaults cargo publish emits).
 
 [profile.release]
 opt-level = 3
