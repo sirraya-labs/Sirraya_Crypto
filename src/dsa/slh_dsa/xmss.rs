@@ -1,37 +1,31 @@
 //! FIPS 205 §6 — eXtended Merkle Signature Scheme (XMSS), as used
 //! internally by SLH-DSA (not the standalone stateful XMSS of RFC 8391 /
 //! SP 800-208 — see the FIPS 205 footnote in §3).
+//!
+//! Generic over `H: HashSuite` — see `wots` module docs.
 
 use super::adrs::{Adrs, TREE, WOTS_HASH};
-use super::hashers::h_hash;
+use super::hash_suite::HashSuite;
 use super::wots::{wots_pk_from_sig, wots_pk_gen, wots_sign};
 
 /// Algorithm 9: xmss_node(SK.seed, i, z, PK.seed, ADRS). Recursively
 /// computes the root of the height-`z` subtree rooted at index `i`.
 /// `adrs` must have layer/tree address set to this XMSS tree; its type is
 /// overwritten as the recursion descends.
-pub fn xmss_node(
-    sk_seed: &[u8],
-    i: u32,
-    z: u32,
-    pk_seed: &[u8],
-    adrs: &mut Adrs,
-    n: usize,
-    len: usize,
-) -> Vec<u8> {
+pub fn xmss_node(sk_seed: &[u8], i: u32, z: u32, pk_seed: &[u8], adrs: &mut Adrs, h: &impl HashSuite, len: usize) -> Vec<u8> {
     if z == 0 {
         adrs.set_type_and_clear(WOTS_HASH);
         adrs.set_key_pair_address(i);
-        wots_pk_gen(sk_seed, pk_seed, adrs, n, len)
+        wots_pk_gen(sk_seed, pk_seed, adrs, h, len)
     } else {
-        let lnode = xmss_node(sk_seed, 2 * i, z - 1, pk_seed, adrs, n, len);
-        let rnode = xmss_node(sk_seed, 2 * i + 1, z - 1, pk_seed, adrs, n, len);
+        let lnode = xmss_node(sk_seed, 2 * i, z - 1, pk_seed, adrs, h, len);
+        let rnode = xmss_node(sk_seed, 2 * i + 1, z - 1, pk_seed, adrs, h, len);
         adrs.set_type_and_clear(TREE);
         adrs.set_tree_height(z);
         adrs.set_tree_index(i);
         let mut concat = lnode;
         concat.extend_from_slice(&rnode);
-        h_hash(pk_seed, adrs.as_bytes(), &concat, n)
+        h.h_hash(pk_seed, adrs, &concat)
     }
 }
 
@@ -44,20 +38,21 @@ pub fn xmss_sign(
     idx: u32,
     pk_seed: &[u8],
     adrs: &mut Adrs,
-    n: usize,
+    h: &impl HashSuite,
     len1: usize,
     len2: usize,
     hp: u32,
 ) -> Vec<u8> {
     let len = len1 + len2;
+    let n = h.n();
     let mut auth = Vec::with_capacity(hp as usize * n);
     for j in 0..hp {
         let k = (idx >> j) ^ 1;
-        auth.extend_from_slice(&xmss_node(sk_seed, k, j, pk_seed, adrs, n, len));
+        auth.extend_from_slice(&xmss_node(sk_seed, k, j, pk_seed, adrs, h, len));
     }
     adrs.set_type_and_clear(WOTS_HASH);
     adrs.set_key_pair_address(idx);
-    let mut out = wots_sign(m, sk_seed, pk_seed, adrs, n, len1, len2);
+    let mut out = wots_sign(m, sk_seed, pk_seed, adrs, h, len1, len2);
     out.extend_from_slice(&auth);
     out
 }
@@ -71,19 +66,20 @@ pub fn xmss_pk_from_sig(
     m: &[u8],
     pk_seed: &[u8],
     adrs: &mut Adrs,
-    n: usize,
+    h: &impl HashSuite,
     len1: usize,
     len2: usize,
     hp: u32,
 ) -> Vec<u8> {
     let len = len1 + len2;
+    let n = h.n();
     adrs.set_type_and_clear(WOTS_HASH);
     adrs.set_key_pair_address(idx);
     let wots_sig_len = len * n;
     let sig = &sig_xmss[0..wots_sig_len];
     let auth = &sig_xmss[wots_sig_len..wots_sig_len + hp as usize * n];
 
-    let mut node = wots_pk_from_sig(sig, m, pk_seed, adrs, n, len1, len2);
+    let mut node = wots_pk_from_sig(sig, m, pk_seed, adrs, h, len1, len2);
 
     adrs.set_type_and_clear(TREE);
     adrs.set_tree_index(idx);
@@ -103,7 +99,7 @@ pub fn xmss_pk_from_sig(
             c.extend_from_slice(&node);
             c
         };
-        node = h_hash(pk_seed, adrs.as_bytes(), &combined, n);
+        node = h.h_hash(pk_seed, adrs, &combined);
     }
     node
 }

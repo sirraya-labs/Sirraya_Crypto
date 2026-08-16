@@ -142,6 +142,19 @@ pub const SLH_DSA_SHAKE_256F: SlhDsaParams = SlhDsaParams {
     security_category: 5,
 };
 
+// FIPS 205 Table 2, SHA2 rows. Same n/h/d/a/k as the SHAKE rows above for
+// each category+speed combination (Table 2's rows are literally shared:
+// "SLH-DSA-SHA2-128s\nSLH-DSA-SHAKE-128s" on one row with one set of
+// values) — only the hash instantiation differs (§11.2 vs §11.1, wired in
+// `mod.rs` via `Sha2Suite` vs `ShakeSuite`).
+
+pub const SLH_DSA_SHA2_128S: SlhDsaParams = SlhDsaParams { name: "SLH-DSA-SHA2-128s", ..SLH_DSA_SHAKE_128S };
+pub const SLH_DSA_SHA2_128F: SlhDsaParams = SlhDsaParams { name: "SLH-DSA-SHA2-128f", ..SLH_DSA_SHAKE_128F };
+pub const SLH_DSA_SHA2_192S: SlhDsaParams = SlhDsaParams { name: "SLH-DSA-SHA2-192s", ..SLH_DSA_SHAKE_192S };
+pub const SLH_DSA_SHA2_192F: SlhDsaParams = SlhDsaParams { name: "SLH-DSA-SHA2-192f", ..SLH_DSA_SHAKE_192F };
+pub const SLH_DSA_SHA2_256S: SlhDsaParams = SlhDsaParams { name: "SLH-DSA-SHA2-256s", ..SLH_DSA_SHAKE_256S };
+pub const SLH_DSA_SHA2_256F: SlhDsaParams = SlhDsaParams { name: "SLH-DSA-SHA2-256f", ..SLH_DSA_SHAKE_256F };
+
 #[cfg(test)]
 mod tests {
     use super::*;

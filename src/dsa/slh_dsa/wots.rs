@@ -1,7 +1,11 @@
 //! FIPS 205 §5 — Winternitz One-Time Signature Plus (WOTS+).
+//!
+//! Generic over `H: HashSuite` (see `hash_suite` module docs) — identical
+//! logic serves both the SHAKE (§11.1) and SHA2 (§11.2) instantiations.
 
 use super::adrs::{Adrs, WOTS_PK, WOTS_PRF};
-use super::hashers::{base_2b, f_hash, prf, t_l};
+use super::hash_suite::HashSuite;
+use super::util::base_2b;
 
 /// w = 2^lgw = 16 for every parameter set (lgw = 4 fixed, §5).
 const W_MINUS_1: u32 = 15;
@@ -9,11 +13,11 @@ const LGW: usize = 4;
 
 /// Algorithm 5: chain(X, i, s, PK.seed, ADRS). Iterates F `s` times on `X`
 /// starting from chain position `i`.
-pub fn chain(x: &[u8], i: u32, s: u32, pk_seed: &[u8], adrs: &mut Adrs, n: usize) -> Vec<u8> {
+pub fn chain(x: &[u8], i: u32, s: u32, pk_seed: &[u8], adrs: &mut Adrs, h: &impl HashSuite) -> Vec<u8> {
     let mut tmp = x.to_vec();
     for j in i..(i + s) {
         adrs.set_hash_address(j);
-        tmp = f_hash(pk_seed, adrs.as_bytes(), &tmp, n);
+        tmp = h.f_hash(pk_seed, adrs, &tmp);
     }
     tmp
 }
@@ -39,13 +43,8 @@ fn wots_message_digits(m: &[u8], len1: usize, len2: usize) -> Vec<u32> {
 
 /// Algorithm 6: wots_pkGen(SK.seed, PK.seed, ADRS). `adrs` must already
 /// have type WOTS_HASH and the correct key pair address set by the caller.
-pub fn wots_pk_gen(
-    sk_seed: &[u8],
-    pk_seed: &[u8],
-    adrs: &mut Adrs,
-    n: usize,
-    len: usize,
-) -> Vec<u8> {
+pub fn wots_pk_gen(sk_seed: &[u8], pk_seed: &[u8], adrs: &mut Adrs, h: &impl HashSuite, len: usize) -> Vec<u8> {
+    let n = h.n();
     let mut sk_adrs = *adrs;
     sk_adrs.set_type_and_clear(WOTS_PRF);
     sk_adrs.set_key_pair_address(adrs.get_key_pair_address());
@@ -53,15 +52,15 @@ pub fn wots_pk_gen(
     let mut tmp = Vec::with_capacity(len * n);
     for i in 0..len as u32 {
         sk_adrs.set_chain_address(i);
-        let sk = prf(pk_seed, sk_seed, sk_adrs.as_bytes(), n);
+        let sk = h.prf(pk_seed, sk_seed, &sk_adrs);
         adrs.set_chain_address(i);
-        tmp.extend_from_slice(&chain(&sk, 0, W_MINUS_1, pk_seed, adrs, n));
+        tmp.extend_from_slice(&chain(&sk, 0, W_MINUS_1, pk_seed, adrs, h));
     }
 
     let mut wotspk_adrs = *adrs;
     wotspk_adrs.set_type_and_clear(WOTS_PK);
     wotspk_adrs.set_key_pair_address(adrs.get_key_pair_address());
-    t_l(pk_seed, wotspk_adrs.as_bytes(), &tmp, n)
+    h.t_l(pk_seed, &wotspk_adrs, &tmp)
 }
 
 /// Algorithm 7: wots_sign(M, SK.seed, PK.seed, ADRS). `adrs` preconditions
@@ -71,10 +70,11 @@ pub fn wots_sign(
     sk_seed: &[u8],
     pk_seed: &[u8],
     adrs: &mut Adrs,
-    n: usize,
+    h: &impl HashSuite,
     len1: usize,
     len2: usize,
 ) -> Vec<u8> {
+    let n = h.n();
     let msg = wots_message_digits(m, len1, len2);
     let len = len1 + len2;
 
@@ -85,9 +85,9 @@ pub fn wots_sign(
     let mut sig = Vec::with_capacity(len * n);
     for i in 0..len as u32 {
         sk_adrs.set_chain_address(i);
-        let sk = prf(pk_seed, sk_seed, sk_adrs.as_bytes(), n);
+        let sk = h.prf(pk_seed, sk_seed, &sk_adrs);
         adrs.set_chain_address(i);
-        sig.extend_from_slice(&chain(&sk, 0, msg[i as usize], pk_seed, adrs, n));
+        sig.extend_from_slice(&chain(&sk, 0, msg[i as usize], pk_seed, adrs, h));
     }
     sig
 }
@@ -99,10 +99,11 @@ pub fn wots_pk_from_sig(
     m: &[u8],
     pk_seed: &[u8],
     adrs: &mut Adrs,
-    n: usize,
+    h: &impl HashSuite,
     len1: usize,
     len2: usize,
 ) -> Vec<u8> {
+    let n = h.n();
     let msg = wots_message_digits(m, len1, len2);
     let len = len1 + len2;
 
@@ -111,11 +112,11 @@ pub fn wots_pk_from_sig(
         adrs.set_chain_address(i);
         let sig_i = &sig[(i as usize) * n..(i as usize + 1) * n];
         let steps = W_MINUS_1 - msg[i as usize];
-        tmp.extend_from_slice(&chain(sig_i, msg[i as usize], steps, pk_seed, adrs, n));
+        tmp.extend_from_slice(&chain(sig_i, msg[i as usize], steps, pk_seed, adrs, h));
     }
 
     let mut wotspk_adrs = *adrs;
     wotspk_adrs.set_type_and_clear(WOTS_PK);
     wotspk_adrs.set_key_pair_address(adrs.get_key_pair_address());
-    t_l(pk_seed, wotspk_adrs.as_bytes(), &tmp, n)
+    h.t_l(pk_seed, &wotspk_adrs, &tmp)
 }

@@ -1,11 +1,12 @@
 //! FIPS 205 §4.2 Addressing — the 32-byte ADRS structure and its member
 //! functions (Table 1, Figures 2-9).
 //!
-//! This is the *uncompressed* layout. §11.2 (SHA2 instantiation) defines a
-//! 22-byte compressed form (Table 3) for implementations that want smaller
-//! address material in the SHA-256/512 calls; that's specific to the SHA2
-//! hash wiring, which isn't implemented here (see `dsa::slh_dsa` docs), so
-//! only the Table 1 layout is needed.
+//! Every algorithm in `wots`/`xmss`/`ht`/`fors`/`core` builds and mutates
+//! this *uncompressed* (Table 1) form throughout, for both the SHAKE and
+//! SHA2 instantiations. `compress()` produces the 22-byte Table 3 form
+//! on demand — that compression is only relevant inside the SHA2 hash
+//! functions themselves (`sha2_suite`), not to any of the tree/signature
+//! logic above them.
 
 pub const WOTS_HASH: u32 = 0;
 pub const WOTS_PK: u32 = 1;
@@ -79,5 +80,22 @@ impl Adrs {
     }
     pub fn get_tree_index(&self) -> u32 {
         u32::from_be_bytes(self.0[28..32].try_into().unwrap())
+    }
+
+    /// Table 3: compressed address form (ADRSc), used only inside the SHA2
+    /// hash instantiation (§11.2) — layer address and type shrink from 4
+    /// bytes to 1 (their value always fits), tree address shrinks from 12
+    /// bytes to 8 (this crate's `set_tree_address` never uses the top 4 of
+    /// those 12 anyway, see that method's doc comment), and the last three
+    /// 4-byte words are unchanged.
+    ///
+    /// ADRSc = ADRS\[3\] ∥ ADRS\[8:16\] ∥ ADRS\[19\] ∥ ADRS\[20:32\]
+    pub fn compress(&self) -> [u8; 22] {
+        let mut out = [0u8; 22];
+        out[0] = self.0[3];
+        out[1..9].copy_from_slice(&self.0[8..16]);
+        out[9] = self.0[19];
+        out[10..22].copy_from_slice(&self.0[20..32]);
+        out
     }
 }
