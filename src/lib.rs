@@ -25,3 +25,7 @@ pub mod traits;
 
 pub use dsa::ml_dsa::MlDsa44;
 pub use dsa::ml_dsa::MlDsa65;
+pub use dsa::slh_dsa::{
+    SlhDsaShake128f, SlhDsaShake128s, SlhDsaShake192f, SlhDsaShake192s, SlhDsaShake256f,
+    SlhDsaShake256s,
+};

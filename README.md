@@ -19,29 +19,29 @@ them.
 sirraya-crypto = "0.1"
 ```
 
+> **Not yet published to crates.io.** The badges above will resolve once
+> the first release goes out — see [Status](#status) before depending on
+> this for anything beyond evaluation.
+
 ---
 
 ## Status
 
 > [!WARNING]
-> **This crate has not been independently security-audited, and no
-> constant-time guarantees are made in this release.** Side-channel
+> **This crate has not been independently security-audited, and its
+> output has not yet been checked against the official NIST ACVP /
+> reference-implementation known-answer test vectors.** Internal test
+> coverage confirms round-trip correctness (pack→unpack, sign→verify,
+> tamper rejection) and matches FIPS 204's published key/signature sizes
+> for each parameter set, but that does not by itself prove byte-exact
+> conformance with the specification. Do not use this in a security-
+> critical system until both of those gaps are closed — track progress in
+> [ARCHITECTURE.md §10](ARCHITECTURE.md#10-testing) and the
+> [Roadmap](#roadmap) below.
+>
+> **No constant-time guarantees are made in this release.** Side-channel
 > hardening (masked gadgets) is scaffolded behind the `masking` feature
 > flag but not yet implemented — see [Feature flags](#feature-flags).
-> Correctness and audit status are separate concerns; see below for what
-> is and isn't covered on the correctness side.
-
-**ML-DSA-44 and ML-DSA-65 have been checked against the official NIST
-ACVP known-answer test vectors** (`ML-DSA-{keyGen,sigGen,sigVer}-FIPS204`,
-from [usnistgov/ACVP-Server](https://github.com/usnistgov/ACVP-Server/tree/master/gen-val/json-files)),
-in addition to the crate's internal round-trip/tamper-rejection suite —
-see [Testing](#testing) for exactly what that covers and doesn't. This is
-NIST's own reference test data, run locally against this implementation's
-output; it is meaningful evidence of specification conformance, but it is
-**not** the same thing as formal ACVP/CAVP validation, which requires
-going through NIST's ACVTS process with an accredited testing lab and
-results in a published certificate. This crate has not gone through that
-process and makes no claim to be "ACVP-validated" in that formal sense.
 
 If you find a correctness or security issue, please open an issue (or,
 for anything sensitive, contact the maintainers directly) rather than a
@@ -77,12 +77,12 @@ public PR with exploit details.
 
 | Algorithm  | FIPS 204 Category | Public Key | Secret Key | Signature | Status |
 |------------|:---:|---:|---:|---:|---|
-| ML-DSA-44  | 2 (128-bit classical / 64-bit quantum) | 1,312 B | 2,560 B | 2,420 B |  Implemented, round-trip tested, ACVP KAT-verified |
-| ML-DSA-65  | 3 (192-bit classical / 96-bit quantum) | 1,952 B | 4,032 B | 3,309 B |  Implemented, round-trip tested, ACVP KAT-verified |
-| ML-DSA-87  | 5 (256-bit classical / 128-bit quantum) | — | — | — |  Planned — see [Roadmap](#roadmap) |
+| ML-DSA-44  | 2 (128-bit classical / 64-bit quantum) | 1,312 B | 2,560 B | 2,420 B | ✅ Implemented, round-trip tested |
+| ML-DSA-65  | 3 (192-bit classical / 96-bit quantum) | 1,952 B | 4,032 B | 3,309 B | ✅ Implemented, round-trip tested |
+| ML-DSA-87  | 5 (256-bit classical / 128-bit quantum) | — | — | — | 📋 Planned — see [Roadmap](#roadmap) |
 
-Sizes match FIPS 204 Table 2 and are confirmed byte-exact against NIST's
-ACVP KeyGen vectors — see [Testing](#testing).
+Sizes match FIPS 204 Table 2. Neither variant has ACVP known-answer-test
+verification yet — see [Status](#status).
 
 ## Quick start
 
@@ -140,6 +140,11 @@ assert!(MyHybrid::verify(&pk, b"belt and suspenders", &sig)?); // true only if B
 cargo install sirraya-crypto
 ```
 
+> Not yet published — until then, build from source:
+> `cargo install --path .` from a checkout of this repo, or
+> `cargo build --release --bin sirraya-crypto` and run the binary from
+> `target/release/`.
+
 ```
 # Generate a keypair (ML-DSA-44 by default)
 sirraya-crypto keygen --save
@@ -184,51 +189,6 @@ shared algorithm engine is parameterized per security level, and a
 step-by-step guide to adding a new parameter set or algorithm family, see
 **[ARCHITECTURE.md](ARCHITECTURE.md)**.
 
-## Testing
-
-Two independent layers:
-
-- **Internal round-trip suite** (`cargo test --release`, 28 tests) —
-  pack↔unpack round-trips, sign→verify round-trips, tampered-signature and
-  wrong-message rejection, for both ML-DSA-44 and ML-DSA-65. This proves
-  internal self-consistency but, on its own, cannot catch a bug where
-  every routine agrees on a value that's self-consistent but wrong.
-
-- **ACVP known-answer tests** (`cargo test --release --test acvp_kat`,
-  5 tests, 170 individual vectors) — checked against the official NIST
-  vectors for `ML-DSA-keyGen-FIPS204`, `ML-DSA-sigGen-FIPS204`, and
-  `ML-DSA-sigVer-FIPS204`, for both ML-DSA-44 and ML-DSA-65:
-  - **KeyGen**: 50 vectors — `seed → keypair_from_seed` compared byte-exact
-    against NIST's expected `pk`/`sk`.
-  - **SigGen**: 60 vectors — deterministic signing (`rnd = 0`), covering
-    both the "internal" interface (`sign_internal`/`Sign_internal`,
-    Algorithm 7) and the "external, pure" interface (`Sign`/`Verify`,
-    Algorithm 2/3, message encoding built by hand since the crate's
-    public `sign()`/`verify()` currently hard-code an empty context —
-    see below).
-  - **SigVer**: 60 vectors — same two interfaces, including NIST's
-    deliberately-tampered vectors (wrong message, corrupted signature,
-    etc.), confirming both correct acceptance and correct rejection.
-
-  **Not covered by this pass**: `externalMu` vectors (no entry point
-  takes a precomputed `mu`), pre-hash / HashML-DSA vectors (not
-  implemented by this crate), randomized (non-deterministic) SigGen
-  vectors (ACVP validates these interactively rather than by fixed KAT
-  comparison), and ML-DSA-87 (not implemented). None of these are
-  claimed as verified.
-
-  Run it: `cargo test --release --test acvp_kat -- --nocapture`. Vector
-  files live in `tests/vectors/`, sourced from
-  [usnistgov/ACVP-Server](https://github.com/usnistgov/ACVP-Server/tree/master/gen-val/json-files).
-
-**Known gap:** the public `sign()`/`verify()` API has no way to pass a
-context string — it's hard-coded to an empty context internally. The
-ACVP "external, pure" tests above work around this by calling
-`sign_internal`/`verify_internal` directly with a hand-built message
-encoding, which is a legitimate use of the crate's public surface but
-isn't how an application using `sign()`/`verify()` would get context
-support today. Track this before relying on context strings.
-
 ## Minimum Supported Rust Version (MSRV)
 
 Rust 2021 edition. No specific MSRV has been pinned or tested against
@@ -236,12 +196,8 @@ yet — track this in the crate's CI once configured.
 
 ## Roadmap
 
-- [x] Verify ML-DSA-44 and ML-DSA-65 against official FIPS 204 / NIST
-      ACVP known-answer test vectors — done for the deterministic,
-      pure/internal-interface paths; see [Testing](#testing) for scope
-- [ ] ACVP coverage for `externalMu`, pre-hash (HashML-DSA), and
-      randomized SigGen paths
-- [ ] Context-string support in the public `sign()`/`verify()` API
+- [ ] Verify ML-DSA-44 and ML-DSA-65 against official FIPS 204 / NIST
+      ACVP known-answer test vectors
 - [ ] ML-DSA-87 (Category 5)
 - [ ] A classical `SignatureScheme` implementor (Ed25519/ECDSA) for a
       real classical+PQ `Hybrid` pairing, not just ML-DSA-with-itself
@@ -255,19 +211,19 @@ See [ARCHITECTURE.md §13](ARCHITECTURE.md#13-contributing-checklist) for
 the pre-PR checklist, especially before touching `core.rs`,
 `common/ring.rs`, or `traits.rs` — this crate has already hit one subtle
 correctness bug from parameter-set-specific logic that looked generic but
-wasn't (an ML-DSA-44 constants file that was a byte-for-byte copy of
-ML-DSA-65's, caught only by the ACVP KAT pass above, not by the internal
-round-trip suite), and the checklist exists to catch a repeat.
+wasn't, and the checklist exists to catch a repeat.
 
 ## References
 
 - [FIPS 204: Module-Lattice-Based Digital Signature Standard](https://csrc.nist.gov/pubs/fips/204/final) — NIST, August 2024
 - [NIST Post-Quantum Cryptography Project](https://csrc.nist.gov/projects/post-quantum-cryptography)
-- [NIST ACVP-Server test vectors](https://github.com/usnistgov/ACVP-Server/tree/master/gen-val/json-files) — source for this crate's KAT suite
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE) — **not yet added to this repo**; add the
+standard MIT license text there before publishing (`Cargo.toml` already
+declares `license = "MIT"`, which crates.io will reject at publish time
+without a matching `LICENSE` file).
 
 ---
 

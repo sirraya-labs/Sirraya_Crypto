@@ -322,7 +322,12 @@ produces the same output as the reference implementation on a given
 input. A self-consistent bug (e.g. every function agreeing on a wrong bit
 layout) would pass every test in this suite.
 
-
+**Known gap:** neither ML-DSA-44 nor ML-DSA-65 has been checked against
+the official NIST ACVP or reference-implementation known-answer test
+vectors. Before trusting this for anything beyond internal testing,
+pull the FIPS 204 ACVP vectors and add a KAT test per variant that feeds
+a known seed/message through `keypair_from_seed` → `sign_deterministic`
+→ `verify` and asserts against the published expected bytes.
 
 ## 11. `main.rs` — CLI
 

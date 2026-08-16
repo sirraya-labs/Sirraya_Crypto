@@ -16,3 +16,4 @@
 //! standardized.
 
 pub mod ml_dsa;
+pub mod slh_dsa;
