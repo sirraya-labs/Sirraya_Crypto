@@ -2,7 +2,7 @@
 name = "sirraya-crypto"
 version = "0.1.1"
 edition = "2021"
-description = "Post-quantum & hybrid digital signatures (FIPS 204 ML-DSA family)"
+description = "Post-quantum, classical & hybrid digital signatures (FIPS 204 ML-DSA, FIPS 205 SLH-DSA, Ed25519)"
 license = "MIT"
 authors = ["Sirraya Labs"]
 repository = "https://github.com/sirraya-labs/sirraya_crypto"
@@ -11,8 +11,34 @@ repository = "https://github.com/sirraya-labs/sirraya_crypto"
 sha3 = "0.10"                                             # SHAKE128/256 (FIPS 204 §3.7); SLH-DSA SHAKE + pre-hash (FIPS 205 §11.1, §10.2.2)
 sha2 = "0.10"                                             # SLH-DSA SHA2 instantiation (FIPS 205 §11.2) + pre-hash (§10.2.2)
 hmac = "0.12"                                             # SLH-DSA PRF_msg under SHA2 (FIPS 205 §11.2.1/11.2.2)
-rand_core = { version = "0.6", features = ["getrandom"] } # OsRng for KeyGen (Alg 1)
+rand_core = { version = "0.6", features = ["getrandom"] } # OsRng for KeyGen (Alg 1); also used directly for Ed25519 seed generation
 hex = "0.4.3"                                             # CLI key/sig encoding
+# classical Ed25519 (RFC 8032) — the Hybrid<PQ, classical> transition partner.
+# Deliberately NOT hand-rolled, unlike ML-DSA/SLH-DSA: curve25519 field
+# arithmetic is exactly the kind of primitive where a mature, widely-used,
+# externally-reviewed implementation is the credible choice over a from-
+# scratch one — see dsa::ed25519 module docs. Pinned to the 2.x line (not
+# 3.0) specifically because it shares this crate's existing rand_core 0.6.x
+# and sha2 0.10.x, avoiding a duplicate major-version dependency tree.
+# default-features disabled (drops only "fast", i.e. curve25519-dalek's
+# precomputed-tables perf optimization — correctness-neutral) specifically
+# to keep pkcs8/spki/base64ct (and their newer-edition requirements) out
+# of the dependency graph entirely, since this crate has no PKCS#8/PEM
+# encoding feature and doesn't need them. Pinned to =2.1.1 (not the latest
+# 2.2.x patch) purely because 2.2.0+ raised ed25519-dalek's own MSRV to
+# 1.81, above this development toolchain's rustc 1.75 — no functional
+# reason to avoid 2.2.x otherwise; bump this pin freely on a newer
+# toolchain.
+ed25519-dalek = { version = "=2.1.1", default-features = false, features = ["std", "rand_core", "zeroize"] }
+zeroize = "=1.8.1"                                        # transitive dep of curve25519-dalek/ed25519-dalek; pinned below 1.9 only
+                                                           # because this development toolchain's cargo (1.75) predates Rust's
+                                                           # edition2024, which zeroize >=1.9 requires — not a statement about which
+                                                           # zeroize version is actually correct for a production build. Whoever
+                                                           # builds this crate on a current toolchain should feel free to drop this
+                                                           # pin (or bump it) once that constraint no longer applies to them.
+base64ct = "=1.6.0"                                       # transitive dep (via ed25519/pkcs8, itself pulled in despite this crate
+                                                           # requesting no pkcs8/pem feature — see note above zeroize). base64ct
+                                                           # >=1.7 requires edition2024, same toolchain constraint as zeroize above.
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] } # ACVP KAT vector parsing (tests/acvp_kat.rs)
