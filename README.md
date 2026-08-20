@@ -120,9 +120,9 @@ public PR with exploit details.
 
 | Algorithm  | FIPS 204 Category | Public Key | Secret Key | Signature | Status |
 |------------|:---:|---:|---:|---:|---|
-| ML-DSA-44  | 2 (128-bit classical / 64-bit quantum) | 1,312 B | 2,560 B | 2,420 B | ✅ Implemented, round-trip tested, ACVP KAT-verified |
-| ML-DSA-65  | 3 (192-bit classical / 96-bit quantum) | 1,952 B | 4,032 B | 3,309 B | ✅ Implemented, round-trip tested, ACVP KAT-verified |
-| ML-DSA-87  | 5 (256-bit classical / 128-bit quantum) | — | — | — | 📋 Planned — see [Roadmap](#roadmap) |
+| ML-DSA-44  | 2 (128-bit classical / 64-bit quantum) | 1,312 B | 2,560 B | 2,420 B |  Implemented, round-trip tested, ACVP KAT-verified |
+| ML-DSA-65  | 3 (192-bit classical / 96-bit quantum) | 1,952 B | 4,032 B | 3,309 B |  Implemented, round-trip tested, ACVP KAT-verified |
+| ML-DSA-87  | 5 (256-bit classical / 128-bit quantum) | — | — | — |  Planned — see [Roadmap](#roadmap) |
 
 Sizes match FIPS 204 Table 2 and are confirmed byte-exact against NIST's
 ACVP KeyGen vectors — see [Testing](#testing).
@@ -133,12 +133,12 @@ All 12 approved parameter sets, per Table 2:
 
 | Algorithm | Category | Public Key | Secret Key | Signature | Status |
 |---|:---:|---:|---:|---:|---|
-| SLH-DSA-{SHAKE,SHA2}-128s | 1 | 32 B | 64 B | 7,856 B | ✅ Implemented, round-trip tested |
-| SLH-DSA-{SHAKE,SHA2}-128f | 1 | 32 B | 64 B | 17,088 B | ✅ Implemented, round-trip tested |
-| SLH-DSA-{SHAKE,SHA2}-192s | 3 | 48 B | 96 B | 16,224 B | ✅ Implemented, round-trip tested |
-| SLH-DSA-{SHAKE,SHA2}-192f | 3 | 48 B | 96 B | 35,664 B | ✅ Implemented, round-trip tested |
-| SLH-DSA-{SHAKE,SHA2}-256s | 5 | 64 B | 128 B | 29,792 B | ✅ Implemented, round-trip tested |
-| SLH-DSA-{SHAKE,SHA2}-256f | 5 | 64 B | 128 B | 49,856 B | ✅ Implemented, round-trip tested |
+| SLH-DSA-{SHAKE,SHA2}-128s | 1 | 32 B | 64 B | 7,856 B |  Implemented, round-trip tested |
+| SLH-DSA-{SHAKE,SHA2}-128f | 1 | 32 B | 64 B | 17,088 B | Implemented, round-trip tested |
+| SLH-DSA-{SHAKE,SHA2}-192s | 3 | 48 B | 96 B | 16,224 B | Implemented, round-trip tested |
+| SLH-DSA-{SHAKE,SHA2}-192f | 3 | 48 B | 96 B | 35,664 B | Implemented, round-trip tested |
+| SLH-DSA-{SHAKE,SHA2}-256s | 5 | 64 B | 128 B | 29,792 B | Implemented, round-trip tested |
+| SLH-DSA-{SHAKE,SHA2}-256f | 5 | 64 B | 128 B | 49,856 B | Implemented, round-trip tested |
 
 "s" parameter sets favor smaller signatures at the cost of slower
 signing; "f" favors faster signing with a larger signature — this is
@@ -156,7 +156,7 @@ n/h/d/a/k). **Not yet checked against ACVP** — see
 
 | Algorithm | Public Key | Secret Key | Signature | Status |
 |---|---:|---:|---:|---|
-| Ed25519 | 32 B | 32 B | 64 B | ✅ Implemented (wraps `ed25519-dalek`), verified against RFC 8032 §7.1 test vectors |
+| Ed25519 | 32 B | 32 B | 64 B |  Implemented (wraps `ed25519-dalek`), verified against RFC 8032 §7.1 test vectors |
 
 Not hand-rolled, unlike ML-DSA/SLH-DSA — see
 [Architecture](#architecture) for why that's the deliberate, credible
